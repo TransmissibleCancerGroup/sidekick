@@ -1,0 +1,7 @@
+{
+	"fileVersion": 1,
+	"versions": {
+		"biod": {"path":"BioD"},
+		"undead": "1.0.6"
+	}
+}

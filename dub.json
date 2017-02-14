@@ -1,0 +1,13 @@
+{
+	"name": "sidekick",
+	"authors": [
+		"Kevin Gori"
+	],
+    "importPaths": ["BioD"],
+    "dependencies": {
+        "biod": {"versions": "~master", "path": "./BioD"}
+    },
+	"description": "A minimal D application.",
+	"copyright": "Copyright © 2017, Kevin Gori",
+	"license": "proprietary"
+}

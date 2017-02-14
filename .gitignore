@@ -87,3 +87,14 @@ ENV/
 
 # Rope project settings
 .ropeproject
+
+# D ignorelist
+.dub
+docs.json
+__dummy.html
+*.o
+*.obj
+__test__*__
+
+# Binary
+sidekick
