@@ -98,3 +98,9 @@ __test__*__
 
 # Binary
 sidekick
+
+# Don't add 1.5Gb of bam files
+data/*
+
+# Ignore any vscode caches
+.vscode/
