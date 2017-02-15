@@ -101,6 +101,8 @@ sidekick
 
 # Don't add 1.5Gb of bam files
 data/*
+*.bam
+*.bam.bai
 
 # Ignore any vscode caches
 .vscode/

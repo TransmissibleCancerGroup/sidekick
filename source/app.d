@@ -24,35 +24,32 @@ double avg_base_quality(R)(const ref R r) {
 	return qual / r.base_qualities.length;
 }
 
-void progress(lazy float p) {
-	static uint n;
-	if(++n % 100 == 0) {
-		writeln(p);
-	}
-}
-
 void main(string[] argv)
 {
-	// Argument handling (do properly later)
-	if (argv.length != 4)
+	// Argument handling (TODO: do properly later w/ getopt)
+	if (argv.length != 6)
 	{
-		writefln("Usage: %s <threads> <bamfile:in> <bamfile:out>", argv[0]);
+		writefln("Usage: %s <threads> <bamfile:in> <half_mapped_reads_bamfile:out> <half_unmapped_reads_bamfile:out> <all_unmapped_reads_bamfile:out>", argv[0]);
 		import std.c.process: exit;
 		exit(-1);
 	} 
 	int nthreads = to!int(argv[1]);
-	string filename = argv[2];
+	string fl_in = argv[2];
+	string hm_out = argv[3];
+	string hu_out = argv[4];
+	string au_out = argv[5];
+
+	// Collect thresholds (TODO: make getopt options)
+	int MAPQUAL = 50;
+	int BASEQUAL = 15;
+	int MINCOV = 1;
 
 	// Set up parallelism for bam reader
 	auto pool = new TaskPool(nthreads);
 	scope(exit) pool.finish();
 
-	// Open the input and output bam files with a parallel pool
-	auto reader = new BamReader(filename, pool);
-	auto writer = new BamWriter(argv[3], -1, pool);
-	scope(exit) writer.finish();
-	writer.writeSamHeader(reader.header);
-	writer.writeReferenceSequenceInfo(reader.reference_sequences);
+	// Open the input bam files with a parallel pool
+	auto reader = new BamReader(fl_in, pool);
 
 	// Iterate over the bam file
 	BamRead[] [string] data;
@@ -75,10 +72,10 @@ void main(string[] argv)
 
 	foreach(readList; data.values) {
 		if (readList.length < 2) continue;
-		if (readList[1].is_unmapped && readList[0].mapping_quality > 50 && avg_base_quality(readList[1]) > 15) {
+		if (readList[1].is_unmapped && readList[0].mapping_quality > MAPQUAL && avg_base_quality(readList[1]) > BASEQUAL) {
 			mapped ~= readList[0];
 		}
-		else if (readList[0].is_unmapped && readList[1].mapping_quality > 50 && avg_base_quality(readList[0]) > 15) {
+		else if (readList[0].is_unmapped && readList[1].mapping_quality > MAPQUAL && avg_base_quality(readList[0]) > BASEQUAL) {
 			mapped ~= readList[1];
 		}
 	}
@@ -86,19 +83,53 @@ void main(string[] argv)
 	writefln("Found %d reads for pileup.", mapped.length);
 	
 	// Pileup to select reads that are in regions that achieve a certain coverage
-	foreach(chunk; pileupChunks(mapped, true)) {
-		foreach (column; chunk) {
-			if (column.coverage > 0) {
-				foreach (read; column.reads) {
-					if (read.name in data) {
-						foreach (cached_read; data[read.name]) {
-							writer.writeRecord(cached_read);
+	if (mapped.length > 0) {
+		
+		// Now open the output bam, reusing the Task Pool
+		auto half_mapped_writer = new BamWriter(hm_out, -1, pool);
+		scope(exit) half_mapped_writer.finish();
+		half_mapped_writer.writeSamHeader(reader.header);
+		half_mapped_writer.writeReferenceSequenceInfo(reader.reference_sequences);
+
+		auto half_unmapped_writer = new BamWriter(hu_out, -1, pool);
+		scope(exit) half_unmapped_writer.finish();
+		half_unmapped_writer.writeSamHeader(reader.header);
+		half_unmapped_writer.writeReferenceSequenceInfo(reader.reference_sequences);
+
+		auto all_unmapped_writer = new BamWriter(au_out, -1, pool);
+		scope(exit) all_unmapped_writer.finish();
+		all_unmapped_writer.writeSamHeader(reader.header);
+		all_unmapped_writer.writeReferenceSequenceInfo(reader.reference_sequences);
+		
+		foreach(chunk; pileupChunks(mapped, true)) {
+			foreach (column; chunk) {
+				if (column.coverage > MINCOV) {
+					foreach (read; column.reads) {
+						if (read.name in data) {
+							BamRead[] readlist = data[read.name];
+							if (readlist[0].is_unmapped && readlist[1].is_unmapped) {
+								all_unmapped_writer.writeRecord(readlist[0]);
+								all_unmapped_writer.writeRecord(readlist[1]);
+							}
+							else if (!readlist[0].is_unmapped && readlist[1].is_unmapped) {
+								half_mapped_writer.writeRecord(readlist[0]);
+								half_unmapped_writer.writeRecord(readlist[1]);
+							} 
+							else if (readlist[0].is_unmapped && !readlist[1].is_unmapped) {
+								half_unmapped_writer.writeRecord(readlist[0]);
+								half_mapped_writer.writeRecord(readlist[1]);
+							}
+							data.remove(read.name);
 						}
-						data.remove(read.name);
 					}
 				}
 			}
 		}
+		writefln("Completed. Half mapped reads written to %s.", hm_out);
+		writefln("           Half unmapped reads written to %s.", hu_out);
+		writefln("           Fully unmapped reads written to %s.", au_out);
 	}
-	writeln("Done.");
+	else {
+		writeln("Completed, but no unmapped reads found.");
+	}
 }
