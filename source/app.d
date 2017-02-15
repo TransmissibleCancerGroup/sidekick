@@ -69,6 +69,7 @@ void main(string[] argv)
 
 	// Get reads for pileup
 	BamRead[] mapped;
+	BamRead[] both_unmapped;
 
 	foreach(readList; data.values) {
 		if (readList.length < 2) continue;
@@ -78,9 +79,26 @@ void main(string[] argv)
 		else if (readList[0].is_unmapped && readList[1].mapping_quality > MAPQUAL && avg_base_quality(readList[0]) > BASEQUAL) {
 			mapped ~= readList[1];
 		}
+		else if (readList[0].is_unmapped && readList[1].is_unmapped && avg_base_quality(readList[0]) > BASEQUAL && avg_base_quality(readList[1]) > BASEQUAL) {
+			both_unmapped ~= readList[0];
+			both_unmapped ~= readList[1];
+		}
 	}
 	sort!compareCoordinates(mapped);
 	writefln("Found %d reads for pileup.", mapped.length);
+	writefln("Found %d doubly-unmapped read pairs", both_unmapped.length);
+
+	// Write the doubly-unmapped reads
+	if (both_unmapped.length > 0) {
+		auto all_unmapped_writer = new BamWriter(au_out, -1, pool);
+		scope(exit) all_unmapped_writer.finish();
+		all_unmapped_writer.writeSamHeader(reader.header);
+		all_unmapped_writer.writeReferenceSequenceInfo(reader.reference_sequences);
+		sort!compareCoordinates(both_unmapped);
+		foreach(read; both_unmapped) {
+			all_unmapped_writer.writeRecord(read);
+		}
+	}
 	
 	// Pileup to select reads that are in regions that achieve a certain coverage
 	if (mapped.length > 0) {
@@ -95,11 +113,6 @@ void main(string[] argv)
 		scope(exit) half_unmapped_writer.finish();
 		half_unmapped_writer.writeSamHeader(reader.header);
 		half_unmapped_writer.writeReferenceSequenceInfo(reader.reference_sequences);
-
-		auto all_unmapped_writer = new BamWriter(au_out, -1, pool);
-		scope(exit) all_unmapped_writer.finish();
-		all_unmapped_writer.writeSamHeader(reader.header);
-		all_unmapped_writer.writeReferenceSequenceInfo(reader.reference_sequences);
 		
 		foreach(chunk; pileupChunks(mapped, true)) {
 			foreach (column; chunk) {
@@ -107,11 +120,7 @@ void main(string[] argv)
 					foreach (read; column.reads) {
 						if (read.name in data) {
 							BamRead[] readlist = data[read.name];
-							if (readlist[0].is_unmapped && readlist[1].is_unmapped) {
-								all_unmapped_writer.writeRecord(readlist[0]);
-								all_unmapped_writer.writeRecord(readlist[1]);
-							}
-							else if (!readlist[0].is_unmapped && readlist[1].is_unmapped) {
+							if (!readlist[0].is_unmapped && readlist[1].is_unmapped) {
 								half_mapped_writer.writeRecord(readlist[0]);
 								half_unmapped_writer.writeRecord(readlist[1]);
 							} 
