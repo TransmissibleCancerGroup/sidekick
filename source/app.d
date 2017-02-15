@@ -84,57 +84,18 @@ void main(string[] argv)
 	}
 	sort!compareCoordinates(mapped);
 	writefln("Found %d reads for pileup.", mapped.length);
-	auto debug_ = new BamWriter("debug.bam", -1, pool);
-	scope(exit) debug_.finish();
-	debug_.writeSamHeader(reader.header);
-	debug_.writeReferenceSequenceInfo(reader.reference_sequences);
-	foreach(read; mapped) debug_.writeRecord(read);
-
+	
 	// Pileup to select reads that are in regions that achieve a certain coverage
-	auto pileup = makePileup(mapped, true);
-	foreach (column; pileup) {
-		if (column.coverage > 0) {
-			foreach (read; column.reads) {
-				
-                writefln("%30s\t%s\t%.2d\t%s\t%2s/%2s\t%2s/%2s\t%10s\t%s %s", 
-                        read.name, 
-                        read.current_base,
-                        read.current_base_quality,
-                        read.cigar_operation,
-                        read.cigar_operation_offset + 1, read.cigar_operation.length,
-                        read.query_offset + 1, read.sequence.length,
-                        read.cigarString(),
-                        read.cigar_before, read.cigar_after);
-        
-				if (read.name in data) {
-					foreach (cached_read; data[read.name]) {
-						writer.writeRecord(cached_read);
+	foreach(chunk; pileupChunks(mapped, true)) {
+		foreach (column; chunk) {
+			if (column.coverage > 0) {
+				foreach (read; column.reads) {
+					if (read.name in data) {
+						foreach (cached_read; data[read.name]) {
+							writer.writeRecord(cached_read);
+						}
+						data.remove(read.name);
 					}
-					data.remove(read.name);
-				}
-			}
-		}
-	}
-	pileup.popFront();
-	foreach (column; pileup) {
-		if (column.coverage > 0) {
-			foreach (read; column.reads) {
-				
-                writefln("%30s\t%s\t%.2d\t%s\t%2s/%2s\t%2s/%2s\t%10s\t%s %s", 
-                        read.name, 
-                        read.current_base,
-                        read.current_base_quality,
-                        read.cigar_operation,
-                        read.cigar_operation_offset + 1, read.cigar_operation.length,
-                        read.query_offset + 1, read.sequence.length,
-                        read.cigarString(),
-                        read.cigar_before, read.cigar_after);
-        
-				if (read.name in data) {
-					foreach (cached_read; data[read.name]) {
-						writer.writeRecord(cached_read);
-					}
-					data.remove(read.name);
 				}
 			}
 		}
