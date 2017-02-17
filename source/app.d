@@ -95,7 +95,7 @@ void main(string[] argv)
 		int nreads = 0;
 		auto unmapfile = new_bamwriter_from_template("tmp_unmapped.bam", reader, pool);
 		scope(exit) unmapfile.finish();
-		auto doubleunmapfile_1 = new_bamwriter_from_template(au_out, reader, pool);
+		auto doubleunmapfile = new_bamwriter_from_template(au_out, reader, pool);
 		scope(exit) doubleunmapfile.finish();
 		auto mapfile = new_bamwriter_from_template("tmp_mapped.bam", reader, pool);
 		scope(exit) mapfile.finish();
