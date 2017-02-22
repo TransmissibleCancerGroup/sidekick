@@ -3,6 +3,7 @@ import bio.bam.region: BamRegion;
 import bio.bam.reader: BamReader;
 import bio.bam.writer: BamWriter;
 import bio.bam.pileup: pileupChunks;
+import containers.ttree: TTree;
 import utils.progressbar: ProgressBar;
 import std.algorithm: filter, reduce, sort;
 import std.conv: to;
@@ -11,7 +12,7 @@ import std.functional: toDelegate;
 import std.getopt;
 import std.parallelism: TaskPool;
 import std.path: buildPath;
-import std.range: iota, tee;
+import std.range: iota, take, tee;
 import std.stdio: writeln, writefln;
 
 /**
@@ -81,7 +82,7 @@ string au_out; // All-unmapped out file
 
 void main(string[] argv)
 {
-    // Argument handling (TODO: do properly later w/ getopt)
+    // Argument handling
     auto args = getopt(
         argv,
         "threads|t", &threads,
@@ -131,7 +132,7 @@ void main(string[] argv)
 
     // Declare regionlist in this scope
     BamRegion[] regions;
-    bool[string] cache;
+    TTree!string cache;
 
     // 1: Select read pairs where at least one read is unmapped
     // 2: Apply quality filters,
@@ -139,6 +140,7 @@ void main(string[] argv)
     // 3: Divert half-mapped, half-unmapped and fully unmapped reads into separate files
     // -caveat: using assoc array 'cache' to keep track of read pairing
     writefln("Searching %s for unmapped reads", fl_in);
+    writeln("----");
     {
         auto bar = new shared(ProgressBar)(100000);
         scope(exit) bar.finish();
@@ -165,7 +167,9 @@ void main(string[] argv)
                 }
                 else {
                     unmapfile.writeRecord(read);
-                    cache[read.name] = true;
+                    //writefln("Inserting '%s' into the cache", read.name);
+                    cache.insert(read.name);
+                    assert(cache.contains(read.name));
                 }
             }
             else {
@@ -173,12 +177,19 @@ void main(string[] argv)
             }
         }
     }
+    writefln("Cache contains %d entries", cache.length);
+    // foreach (entry; cache.range) {
+        // writefln("%s", entry);
+    // }
+    //writefln("Cache contains 'HS40_17741:4:2306:18859:99557#9'? %s", cache.contains("HS40_17741:4:2306:18859:99557#9") ? "yes" : "no");
+
 
     // 1: Reopen half-mapped reads file
     // 2: Filter for reads that have a quality passing unmapped pair (in cache)
     //    and divert to filtered file
     // 3: Pileup half-mapped reads and identify regions where depth > MINCOV
     writeln("Checking coverage of filtered reads");
+    writeln("----");
     {
         auto bar = new shared(ProgressBar)(10000);
         scope(exit) bar.finish();
@@ -189,7 +200,7 @@ void main(string[] argv)
         scope(exit) filteredmapfile.finish();
 
         auto mReadGetter = mReader.readsWithProgress((lazy float p) { bar.update(p); })
-                            //.filter!(r => r.name in cache)
+                            .filter!(r => cache.contains(r.name))
                             .tee!(r => filteredmapfile.writeRecord(r));
 
         if (mReadGetter.empty) {
@@ -199,6 +210,8 @@ void main(string[] argv)
         }
 
         // Now do pileup and identify regions
+        writeln("Doing pileup\n");
+        writeln("^^^^\n");
         foreach (chunk; pileupChunks(mReadGetter, true)) {
 
             int refid = 0; // Region delimiters
@@ -208,14 +221,14 @@ void main(string[] argv)
 
             foreach (column; chunk) {
                 if (column.coverage >= MINCOV) {
-                    writefln("%d",
-                        column.coverage);
-                    foreach (read; column.reads) {
-                        writefln("%s\t%d\t%d",
-                            read.name, read.position, read.position + read.basesCovered());
-                    }
+                    // writefln("%d",
+                        // column.coverage);
+                    // foreach (read; column.reads) {
+                        // writefln("%s\t%d\t%d",
+                            // read.name, read.position, read.position + read.basesCovered());
+                    // }
                     if (!initialised) {
-                        writeln("init...");
+                        //writeln("init...");
                         initialised = true;
                         refid = column.ref_id;
                         left = column.position;
@@ -299,4 +312,5 @@ void main(string[] argv)
     writefln("           Half unmapped reads written to %s.", hu_out);
     writefln("           Fully unmapped reads written to %s.", au_out);
 END:
+    writeln("Done.");
 }
