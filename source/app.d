@@ -86,7 +86,7 @@ void filter_bam(string query, string subject, ref TaskPool taskpool, string tmpd
     int batch = 0;
     auto cache = redBlackTree!string(); // could use TTree or HashSet from emsi_containers
     while(!queries.empty) {             // but seems there is no memory advantage
-        
+
         scope(exit) {
             batch++;
             cache.clear();
@@ -97,7 +97,7 @@ void filter_bam(string query, string subject, ref TaskPool taskpool, string tmpd
         // populate the (empty) cache
         assert(cache.empty);
         cache.insert(queries.take(at_a_time).map!(r => r.name));
-        if (cache.length == 1) break;  // maybe queries.empty is broken? 
+        if (cache.length == 1) break;  // maybe queries.empty is broken?
         writefln("[filter_bam] - batch number %d processing %d reads", batch, cache.length);
 
         // Open subject file
@@ -158,11 +158,13 @@ void main(string[] argv)
         std.getopt.config.required, "mapped|m", &hm_out,
         std.getopt.config.required, "unmapped|u", &hu_out,
         std.getopt.config.required, "all|a", &au_out);
+    if (MINCOV < 2) MINCOV = 2;
 
     writefln("threads = %d", threads);
     writefln("MAPQUAL = %d", MAPQUAL);
     writefln("BASEQUAL = %d", BASEQUAL);
     writefln("MINCOV = %d", MINCOV);
+    writefln("delete = %s", delete_wdir ? "true" : "false");
 
     if (args.helpWanted)
     {
@@ -188,6 +190,11 @@ void main(string[] argv)
     string tmp_unmapped_filtered = buildPath(working_dir, "tmp_unmapped_filtered.bam");
     string tmp_both_1 = buildPath(working_dir, "tmp_both_1.bam");  // Both unmapped, first in pair
     string tmp_both_2 = buildPath(working_dir, "tmp_both_2.bam");  // Both unmapped, second in pair
+    string tmp_both_1_filtered = buildPath(working_dir, "tmp_both_1_filtered.bam");  // Both unmapped, second in pair
+    string tmp_both_2_filtered = buildPath(working_dir, "tmp_both_2_filtered.bam");  // Both unmapped, second in pair
+
+    // Initialise final read count variables
+    int hm_out_n, hu_out_n, au_out_n;
 
     // Set up parallelism for bam reader
     auto pool = new TaskPool(threads);
@@ -226,19 +233,27 @@ void main(string[] argv)
         auto mapfile = new_bamwriter_from_template(tmp_mapped, reader, pool);
         scope(exit) mapfile.finish();
 
+        int[6] counts;
         auto readGetter = reader.readsWithProgress((lazy float p) { bar.update(p); })
-                                .filter!(passes_initial_checks)
-                                .filter!(r => passes_quality_checks(r, BASEQUAL, MAPQUAL));
+                                .filter!(passes_initial_checks).tee!(r => counts[0]++)
+                                .filter!(r => passes_quality_checks(r, BASEQUAL, MAPQUAL)).tee!(r => counts[1]++);
 
         foreach (read; readGetter) {
             nreads++;
             if (read.is_unmapped) {
                 if (read.mate_is_unmapped) {
-                    if (read.is_first_of_pair) both_first_file.writeRecord(read);
-                    else if (read.is_second_of_pair) both_second_file.writeRecord(read);
+                    if (read.is_first_of_pair) {
+                        both_first_file.writeRecord(read);
+                        counts[2]++;
+                    }
+                    else if (read.is_second_of_pair) {
+                        both_second_file.writeRecord(read);
+                        counts[3]++;
+                    }
                 }
                 else {
                     unmapfile.writeRecord(read);
+                    counts[4]++;
                     //writefln("Inserting '%s' into the cache", read.name);
                     //cache.insert(read.name);
                     //assert(cache.contains(read.name));
@@ -246,17 +261,22 @@ void main(string[] argv)
             }
             else {
                 mapfile.writeRecord(read);
+                counts[5]++;
             }
         }
+        // writefln("----\n%d\t%d\t%d\t%d\t%d\t%d\n----\n", counts[0], counts[1], counts[2], counts[3], counts[4], counts[5]);
     }
-    
+
+
     // 1: Filter tmp_mapped to only contain reads with a partner in tmp_unmapped => tmp_mapped_filtered
     // 2: Filter tmp_unmapped for reads in tmp_mapped_filtered => tmp_unmapped_filtered
     writeln("Filtering tmp bam files for matching pairs");
     {
         scope(exit) GC.collect();GC.minimize();
         filter_bam(tmp_unmapped, tmp_mapped, pool, working_dir, tmp_mapped_filtered);
-        filter_bam(tmp_mapped_filtered, tmp_unmapped, pool, working_dir, tmp_unmapped_filtered);
+        filter_bam(tmp_mapped, tmp_unmapped, pool, working_dir, tmp_unmapped_filtered);
+        filter_bam(tmp_both_1, tmp_both_2, pool, working_dir, tmp_both_2_filtered);
+        filter_bam(tmp_both_2, tmp_both_1, pool, working_dir, tmp_both_1_filtered);
     }
 
     // 1: Reopen half-mapped reads file
@@ -274,7 +294,7 @@ void main(string[] argv)
         //auto filteredmapfile = new_bamwriter_from_template(tmp_mapped_filtered, mReader, pool);
         //scope(exit) filteredmapfile.finish();
 
-        auto mReadGetter = mReader.readsWithProgress((lazy float p) { bar.update(p); });        
+        auto mReadGetter = mReader.readsWithProgress((lazy float p) { bar.update(p); });
 
         if (mReadGetter.empty) {
             import std.datetime: Clock;
@@ -323,7 +343,7 @@ void main(string[] argv)
             }
         }
     }
-    // writeln(regions);
+    foreach (region; regions) writeln(region);
 
     if (regions.length == 0) {
         import std.datetime: Clock;
@@ -344,6 +364,7 @@ void main(string[] argv)
 
         foreach (read; reader.reads) {
             if (overlaps(read, region, true)) {
+                hu_out_n++;
                 writer.writeRecord(read);
             }
             else if (region.fullyLeftOf(read.ref_id, read.mate_position)) {
@@ -368,6 +389,7 @@ void main(string[] argv)
 
         foreach (read; reader.reads) {
             if (overlaps(read, region, false)) {
+                hm_out_n++;
                 writer.writeRecord(read);
             }
             else if (region.fullyLeftOf(read.ref_id, read.mate_position)) {
@@ -378,11 +400,21 @@ void main(string[] argv)
         }
     }
 
-    writefln("Completed. Half mapped reads written to %s.", hm_out);
-    writefln("           Half unmapped reads written to %s.", hu_out);
-    writefln("           Fully unmapped reads written to %s.", au_out);
+    {
+        auto multireader = new MultiBamReader([tmp_both_1_filtered, tmp_both_2_filtered], pool);
+        auto writer = new_bamwriter_from_template(au_out, multireader, pool);
+        scope(exit) writer.finish();
+        foreach (read; multireader.reads) {
+            writer.writeRecord(read);
+            au_out_n++;
+        }
+    }
+
+    writefln("Completed. %d Half mapped reads written to %s.", hm_out_n, hm_out);
+    writefln("           %d Half unmapped reads written to %s.", hu_out_n, hu_out);
+    writefln("           %d Fully unmapped reads written to %s.", au_out_n, au_out);
 END:
-    import core.thread;
-    Thread.sleep( dur!("seconds")( 30 ) );
+    // import core.thread;
+    // Thread.sleep( dur!("seconds")( 30 ) );
     writeln("Done.");
 }
